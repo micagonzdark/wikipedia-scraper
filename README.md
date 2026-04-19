@@ -20,12 +20,13 @@ The tool was built with a focus on **modularity**, **reproducibility**, and **cl
 
 | Feature | Details |
 |---|---|
-| 🏗️ **Modular Architecture** | Logic split into `fetcher`, `storage`, and `analyzer` modules under a clean `scraper/` package |
-| ⚙️ **Typer CLI** | Full argument parsing with `--url`, `--top`, `--output`; built-in `--help`; range validation on `--top` |
+| 🏗️ **Modular Architecture** | Logic split into `fetcher`, `storage`, `analyzer`, and `visualizer` modules under a clean `scraper/` package |
+| ⚙️ **Typer CLI** | Two commands (`run`, `visualize`) with `--url`, `--top`, `--output`, `--plot`; range validation; built-in `--help` |
 | 🧹 **Automated Data Cleaning** | Regex-based tokenization, Spanish stopword filtering, and minimum token-length threshold |
-| 📄 **Dual CSV Export** | Generates `titulares.csv` (raw headlines) and `top_N_palabras.csv` (frequency ranking) |
+| 📄 **Append-Mode CSV** | `storage.py` appends new rows on every run — headlines accumulate over time for historical analysis |
+| 📈 **Time-Series Visualization** | `visualizer.py` reads the full history, pivots by (date, word), and generates a styled dark-theme PNG chart |
 | 📊 **Rich Terminal Output** | Colored tables, progress spinners, Unicode bar charts — all rendered via the `rich` library |
-| 🔁 **Configurable Pipeline** | Every parameter (URL, output file, top-N count) is overridable from the command line |
+| 🔁 **Configurable Pipeline** | Every parameter (URL, output file, top-N count, plot toggle) is overridable from the command line |
 
 ---
 
@@ -62,11 +63,14 @@ wikipedia_scraper/
 ├── scraper/
 │   ├── __init__.py        # Public API re-exports
 │   ├── fetcher.py         # scrape_headlines() — HTTP + HTML parsing
-│   ├── storage.py         # save_to_csv() — CSV persistence
-│   └── analyzer.py        # analyze_words() — NLP frequency analysis
+│   ├── storage.py         # save_to_csv() — CSV append mode
+│   ├── analyzer.py        # analyze_words() — NLP frequency analysis
+│   └── visualizer.py      # generate_timeseries() — matplotlib PNG chart
 ├── output/
-│   └── .gitkeep           # Folder tracked; generated files are gitignored
-├── main.py                # CLI entry point (Typer)
+│   ├── .gitkeep           # Folder tracked; generated files are gitignored
+│   ├── titulares.csv      # Accumulates headline history (untracked)
+│   └── timeseries_plot.png  # Generated chart (untracked)
+├── main.py                # CLI entry point (Typer) — 2 commands
 ├── requirements.txt
 └── README.md
 ```
@@ -112,36 +116,55 @@ python -X utf8 main.py --help
 ```
 
 ```
- Usage: main.py [OPTIONS]
+ Usage: main.py [OPTIONS] COMMAND [ARGS]...
 
- Pipeline completo: scraping -> CSV -> analisis de frecuencia de palabras.
+ Scrape Wikipedia headlines, export to CSV, analyze word frequency,
+ and visualize trends over time.
 
-┌─ Options ───────────────────────────────────────────────────────────────────┐
-│ --url    TEXT               URL of the page to scrape.                      │
-│                             [default: https://es.wikipedia.org/wiki/...]    │
-│ --top    INTEGER [1<=x<=50] Number of top words to display. [default: 5]    │
-│ --output TEXT               Name of the output CSV file.                    │
-│                             [default: titulares.csv]                        │
-│ --help                      Show this message and exit.                     │
+┌─ Commands ──────────────────────────────────────────────────────────────────┐
+│  run         Full pipeline: scraping → CSV (append) → word-frequency.       │
+│  visualize   Standalone: generate time-series chart from existing CSV.       │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Run with defaults
-
 ```bash
-python -X utf8 main.py
+python -X utf8 main.py run --help
 ```
 
-### Custom run — Top 3 words, custom filename
-
-```bash
-python -X utf8 main.py --top 3 --output noticias_hoy.csv
+```
+┌─ Options ───────────────────────────────────────────────────────────────────┐
+│ --url     TEXT               URL of the front page to scrape.               │
+│                              [default: https://es.wikipedia.org/wiki/...]   │
+│ --top     INTEGER [1<=x<=50] Number of top words to display. [default: 5]   │
+│ --output  TEXT               CSV filename (appends to existing).            │
+│                              [default: titulares.csv]                       │
+│ --plot    / --no-plot        Generate time-series chart after pipeline.      │
+│ --help                       Show this message and exit.                    │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Scrape an English Wikipedia page
+### Run the full pipeline (default)
 
 ```bash
-python -X utf8 main.py --url https://en.wikipedia.org/wiki/Main_Page --top 10
+python -X utf8 main.py run
+```
+
+### Scrape + auto-generate chart in one command
+
+```bash
+python -X utf8 main.py run --top 5 --plot
+```
+
+### Generate chart from existing accumulated data
+
+```bash
+python -X utf8 main.py visualize --top 7
+```
+
+### Custom output file and top-N count
+
+```bash
+python -X utf8 main.py run --top 3 --output noticias_hoy.csv
 ```
 
 ---
@@ -186,6 +209,28 @@ Sample run on **April 19, 2026** — 48 headlines extracted from the Spanish Wik
 
 ---
 
+## Time-Series Tracking
+
+The scraper is designed to **accumulate data over time**. Every run appends new rows to `output/titulares.csv` — the header is written once, and all subsequent runs just add data.
+
+After several days of runs, visualize the trends:
+
+```bash
+# Option A: scrape today + auto-plot
+python -X utf8 main.py run --plot
+
+# Option B: plot from existing history without re-scraping
+python -X utf8 main.py visualize --top 5
+```
+
+The generated chart (`output/timeseries_plot.png`) shows word frequency per day, styled for dark terminals and GitHub README embeds:
+
+![Time-Series Chart](output/timeseries_plot.png)
+
+> **How to automate:** Schedule `python -X utf8 main.py run` as a daily cron job (Linux/macOS) or a Windows Task Scheduler entry to build a genuine historical dataset.
+
+---
+
 ## Dependencies
 
 | Package | Version | Role |
@@ -194,6 +239,8 @@ Sample run on **April 19, 2026** — 48 headlines extracted from the Spanish Wik
 | `beautifulsoup4` | 4.12.3 | HTML parsing and content extraction |
 | `lxml` | 5.3.0 | High-performance HTML parser backend |
 | `typer[all]` | 0.24.1 | CLI framework (includes `click` + `rich`) |
+| `pandas` | 3.0.2 | Historical data aggregation and pivoting |
+| `matplotlib` | 3.10.8 | Time-series chart generation (dark-theme PNG) |
 
 ---
 

@@ -1,24 +1,26 @@
 """
-main.py — Punto de entrada CLI de wikipedia-scraper.
+main.py — CLI entry point for wikipedia-scraper.
 
-Uso (Windows):
+Usage (Windows):
     python -X utf8 main.py [OPTIONS]
+    python -X utf8 main.py visualize [OPTIONS]
 
-Ejemplos:
-    python -X utf8 main.py
-    python -X utf8 main.py --top 10
-    python -X utf8 main.py --url https://en.wikipedia.org/wiki/Main_Page --top 3
-    python -X utf8 main.py --top 5 --output noticias_hoy.csv
+Examples:
+    python -X utf8 main.py                                 # default pipeline
+    python -X utf8 main.py --top 10 --plot                 # scrape + chart
+    python -X utf8 main.py --top 3 --output noticias.csv   # custom output
+    python -X utf8 main.py visualize --csv output/titulares.csv --top 7
 """
 
 import sys
 
-# Forzar UTF-8 antes de cualquier import que toque stdout (Rich, Typer, etc.)
-# Necesario en Windows donde la consola usa cp1252 por defecto.
+# Force UTF-8 before any import that touches stdout (Rich, Typer, etc.)
+# Required on Windows where the console defaults to cp1252.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
+
 from pathlib import Path
 from typing import Annotated
 
@@ -27,115 +29,167 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
-from scraper import scrape_headlines, save_to_csv, analyze_words, WIKIPEDIA_URL
+from scraper import (
+    scrape_headlines,
+    save_to_csv,
+    analyze_words,
+    generate_timeseries,
+    WIKIPEDIA_URL,
+)
+from scraper.storage import DEFAULT_OUTPUT_DIR
 
 # ---------------------------------------------------------------------------
-# App Typer
+# App
 # ---------------------------------------------------------------------------
 app = typer.Typer(
     name="wikipedia-scraper",
     help=(
-        "Extrae titulares de la portada de Wikipedia, los guarda en un CSV "
-        "y analiza las palabras más frecuentes del día."
+        "Scrape Wikipedia headlines, export to CSV, analyze word frequency, "
+        "and visualize trends over time."
     ),
     add_completion=False,
+    rich_markup_mode="rich",
 )
 
-# legacy_windows=False: usa el renderer moderno de Windows (Unicode nativo)
-# en lugar del wrapper LegacyWindowsConsole que falla con cp1252.
+# legacy_windows=False: use the modern Win32 Unicode renderer, not the
+# LegacyWindowsConsole wrapper that fails with cp1252 on special characters.
 console = Console(legacy_windows=False)
 
 
 # ---------------------------------------------------------------------------
-# Comando principal
+# Command 1: run  (scrape + save + analyze, optionally plot)
 # ---------------------------------------------------------------------------
 @app.command()
 def run(
     url: Annotated[
         str,
-        typer.Option(
-            "--url",
-            help="URL de la portada a scrapear.",
-            show_default=True,
-        ),
+        typer.Option("--url", help="URL of the Wikipedia front page to scrape.", show_default=True),
     ] = WIKIPEDIA_URL,
     top: Annotated[
         int,
-        typer.Option(
-            "--top",
-            help="Cantidad de palabras más frecuentes a mostrar.",
-            min=1,
-            max=50,
-            show_default=True,
-        ),
+        typer.Option("--top", help="Number of top words to display.", min=1, max=50, show_default=True),
     ] = 5,
     output: Annotated[
         str,
-        typer.Option(
-            "--output",
-            help="Nombre del archivo CSV donde se guardan los titulares.",
-            show_default=True,
-        ),
+        typer.Option("--output", help="CSV filename for storing headlines (appends to existing).", show_default=True),
     ] = "titulares.csv",
+    plot: Annotated[
+        bool,
+        typer.Option("--plot/--no-plot", help="Generate a time-series chart from the full CSV history."),
+    ] = False,
 ) -> None:
     """
-    Pipeline completo: scraping -> CSV -> analisis de frecuencia de palabras.
-    """
+    [bold cyan]Full pipeline:[/bold cyan] scraping → CSV (append) → word-frequency analysis.
 
-    # --- Paso 1: Scraping ----------------------------------------------------
-    console.rule("[bold cyan]Paso 1 — Scraping")
+    Use [bold]--plot[/bold] to also generate a time-series chart from the accumulated history.
+    """
+    # --- Step 1: Scraping ----------------------------------------------------
+    console.rule("[bold cyan]Step 1 — Scraping")
     console.print(f"  URL: [link={url}]{url}[/link]")
 
     try:
-        with console.status("Descargando portada...", spinner="dots"):
+        with console.status("Downloading front page...", spinner="dots"):
             titulares = scrape_headlines(url)
     except Exception as e:
-        console.print(f"[bold red]Error al conectar:[/bold red] {e}")
+        console.print(f"[bold red]Connection error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
-    console.print(f"  [green]OK[/green] {len(titulares)} titulares extraídos\n")
+    console.print(f"  [green]OK[/green] {len(titulares)} headlines extracted\n")
 
-    # Breakdown por sección
-    secciones: dict[str, int] = {}
+    section_counts: dict[str, int] = {}
     for t in titulares:
-        secciones[t["seccion"]] = secciones.get(t["seccion"], 0) + 1
-    for seccion, n in secciones.items():
+        section_counts[t["seccion"]] = section_counts.get(t["seccion"], 0) + 1
+    for seccion, n in section_counts.items():
         console.print(f"    [dim]·[/dim] {seccion}: [bold]{n}[/bold]")
 
-    # --- Paso 2: Guardar CSV -------------------------------------------------
-    console.rule("[bold cyan]Paso 2 — Guardando CSV")
+    # --- Step 2: Append to CSV -----------------------------------------------
+    console.rule("[bold cyan]Step 2 — Saving CSV")
     ruta_csv = save_to_csv(titulares, filename=output)
-    console.print(f"  [green]OK[/green] {ruta_csv}")
-    console.print(f"       {ruta_csv.stat().st_size:,} bytes · {len(titulares)} filas\n")
 
-    # --- Paso 3: Análisis de palabras ----------------------------------------
+    # Count total rows in accumulated file
+    with open(ruta_csv, encoding="utf-8") as f:
+        total_rows = sum(1 for _ in f) - 1  # subtract header
+
+    console.print(f"  [green]OK[/green] {ruta_csv}")
+    console.print(f"       {ruta_csv.stat().st_size:,} bytes  ·  "
+                  f"[bold]{len(titulares)}[/bold] new rows  ·  "
+                  f"[bold]{total_rows}[/bold] total\n")
+
+    # --- Step 3: Word-frequency analysis -------------------------------------
     top_filename = f"top_{top}_palabras.csv"
-    console.rule(f"[bold cyan]Paso 3 — Top {top} palabras")
+    console.rule(f"[bold cyan]Step 3 — Top {top} Words")
 
     top_palabras = analyze_words(titulares, top_n=top, output_filename=top_filename)
-    ruta_top = Path(ruta_csv).parent / top_filename
+    ruta_top = ruta_csv.parent / top_filename
     console.print(f"  [green]OK[/green] {ruta_top}\n")
 
-    # Tabla de resultados con rich
     tabla = Table(
-        title=f"Top {top} palabras más frecuentes",
+        title=f"Top {top} most frequent words  [dim](today's run)[/dim]",
         box=box.ROUNDED,
         show_header=True,
         header_style="bold magenta",
     )
-    tabla.add_column("Rank", justify="center", style="dim", width=6)
-    tabla.add_column("Palabra", style="bold")
-    tabla.add_column("Frecuencia", justify="right")
-    tabla.add_column("Barra", no_wrap=True)
+    tabla.add_column("Rank",      justify="center", style="dim", width=6)
+    tabla.add_column("Word",      style="bold")
+    tabla.add_column("Frequency", justify="right")
+    tabla.add_column("Bar",       no_wrap=True)
 
     max_freq = top_palabras[0][1] if top_palabras else 1
     for i, (palabra, freq) in enumerate(top_palabras, start=1):
         barra_len = int((freq / max_freq) * 30)
-        barra = "[green]" + "█" * barra_len + "[/green]"
-        tabla.add_row(str(i), palabra, str(freq), barra)
+        tabla.add_row(str(i), palabra, str(freq), "[green]" + "█" * barra_len + "[/green]")
 
     console.print(tabla)
-    console.rule("[bold green]Pipeline completado")
+
+    # --- Step 4 (optional): Time-series plot ---------------------------------
+    if plot:
+        _run_visualizer(ruta_csv, top)
+
+    console.rule("[bold green]Pipeline complete")
+
+
+# ---------------------------------------------------------------------------
+# Command 2: visualize  (standalone chart from existing CSV)
+# ---------------------------------------------------------------------------
+@app.command()
+def visualize(
+    csv: Annotated[
+        Path,
+        typer.Option(
+            "--csv",
+            help="Path to the accumulated headlines CSV.",
+            show_default=True,
+        ),
+    ] = DEFAULT_OUTPUT_DIR / "titulares.csv",
+    top: Annotated[
+        int,
+        typer.Option("--top", help="Number of top words to chart.", min=1, max=50, show_default=True),
+    ] = 5,
+) -> None:
+    """
+    [bold cyan]Standalone visualizer:[/bold cyan] generate a time-series chart from an existing CSV.
+
+    Reads the accumulated [bold]titulares.csv[/bold] and saves [bold]timeseries_plot.png[/bold].
+    """
+    _run_visualizer(csv, top)
+    console.rule("[bold green]Visualization complete")
+
+
+# ---------------------------------------------------------------------------
+# Shared visualization helper
+# ---------------------------------------------------------------------------
+def _run_visualizer(csv_path: Path, top_n: int) -> None:
+    console.rule("[bold cyan]Step 4 — Time-Series Visualization")
+    console.print(f"  Reading: {csv_path}")
+
+    try:
+        with console.status("Generating chart...", spinner="dots"):
+            ruta_plot = generate_timeseries(csv_path, top_n=top_n)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[bold red]Visualization error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    console.print(f"  [green]OK[/green] Chart saved → {ruta_plot}\n")
 
 
 # ---------------------------------------------------------------------------
