@@ -24,12 +24,10 @@ After a week of daily runs, you have a real dataset that tells you what topics W
 
 ## What I learned building this
 
-- **Web scraping** with `requests` and `BeautifulSoup` — including how to actually inspect a live webpage's HTML to find the right elements (they're often different from what you'd expect from tutorials)
-- **Building CLI tools** with `Typer` and `Rich` for colored, readable terminal output
-- **Python package structure** — organizing code into a proper `scraper/` package with separate files for each responsibility
-- **Working with data** using `pandas` — grouping, counting, and reshaping data over time
-- **Interactive charts** with `Plotly` — hover effects, dark themes, and publishing as standalone HTML files
-- **Debugging a Windows encoding bug** — a tricky issue where the terminal crashes on special characters because Windows uses `cp1252` instead of `UTF-8` by default
+- Dealing with a real **Windows encoding bug** — the terminal was crashing on special characters because Windows defaults to `cp1252` instead of `UTF-8`. Took some digging to fix properly.
+- **Cleaning messy data** — raw headlines are full of noise (months, prepositions, image captions). I built a stopword filter to strip all of that out so only meaningful words remain.
+- **Organizing code into modules** instead of dumping everything into one file. Each module (`fetcher`, `storage`, `analyzer`, `visualizer`) has one job.
+- **Building a CLI others can actually use** — flags like `--top`, `--url`, and `--plot` make the tool flexible without needing to touch the code.
 
 ---
 
@@ -109,28 +107,31 @@ python -X utf8 main.py run --help
 
 ---
 
-## Sample output
+## Project Showcase
 
-Running `main.py run` prints a table directly in the terminal:
+### Top 5 words — April 19, 2026 (360 headlines tracked over 5 days)
 
+After filtering out months, prepositions, and other noise, the words that actually came out on top:
+
+| Rank | Word | Occurrences | What it reflects |
+|:---:|---|:---:|---|
+| 1 | **futbolista** | 27 | Several footballer obituaries and sports news |
+| 2 | **día** | 30 | International Days listed on Wikipedia |
+| 3 | **campeonato** | 22 | Multiple active championships (NBA, snooker, judo) |
+| 4 | **nace** | 22 | Birthday entries in the Efemérides section |
+| 5 | **actriz** | 18 | Several actress entries in current events |
+
+### What the CSV looks like inside
+
+```csv
+titular,seccion,fecha
+"19 de abril: Elecciones legislativas de Bulgaria",Noticias de actualidad,2026-04-19T20:26:40
+"19 de abril: Amstel Gold Race masculina y femenina de ciclismo",Noticias de actualidad,2026-04-19T20:26:40
+"Pericles",Articulo destacado,2026-04-19T20:26:40
 ```
-────────────────── Step 3 — Top 5 Words ──────────────────
 
-        Top 5 most frequent words  (today's run)
-╭────────┬─────────────┬────────────┬────────────────────────────────╮
-│  Rank  │ Word        │ Frequency  │ Bar                            │
-├────────┼─────────────┼────────────┼────────────────────────────────┤
-│   1    │ futbolista  │     4      │ ██████████████████████████████ │
-│   2    │ día         │     4      │ ██████████████████████████████ │
-│   3    │ israel      │     3      │ ██████████████████████         │
-│   4    │ años        │     5      │ ████████████████████████       │
-│   5    │ baloncesto  │     2      │ ███████████████                │
-╰────────┴─────────────┴────────────┴────────────────────────────────╯
-```
-
-After several daily runs, `visualize` creates an interactive chart at `output/timeseries_plot.html`.
-Open it in any browser — you can hover to see exact values, click the legend to toggle words on and off,
-and zoom into specific date ranges.
+After several daily runs, `main.py visualize` creates an interactive chart at `output/timeseries_plot.html`.
+Open it in any browser — hover to see exact values, click the legend to toggle words on and off, and zoom in.
 
 ---
 
