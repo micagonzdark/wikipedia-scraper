@@ -1,16 +1,15 @@
 """
 scraper/visualizer.py
-Responsabilidad: leer el CSV histórico y generar un gráfico de series
-temporales con la frecuencia diaria de las N palabras más frecuentes.
+Reads the accumulated headlines CSV and generates an interactive
+Plotly time-series chart saved as an HTML file.
 """
 
 import re
 from collections import Counter
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import pandas as pd
+import plotly.express as px
 
 from .analyzer import STOPWORDS
 from .storage import DEFAULT_OUTPUT_DIR
@@ -20,7 +19,6 @@ from .storage import DEFAULT_OUTPUT_DIR
 # ---------------------------------------------------------------------------
 _LIMPIEZA = re.compile(r"[^a-záéíóúüñ\s]")
 
-# Curated color palette — vibrant, dark-mode friendly
 _PALETTE = [
     "#7C3AED",  # violet
     "#06B6D4",  # cyan
@@ -33,13 +31,6 @@ _PALETTE = [
     "#F97316",  # orange
     "#A78BFA",  # light violet
 ]
-
-_DARK_BG     = "#0D1117"
-_PANEL_BG    = "#161B22"
-_GRID_COLOR  = "#30363D"
-_AXIS_COLOR  = "#94A3B8"
-_TICK_COLOR  = "#CBD5E1"
-_FOOTER_COLOR = "#484F58"
 
 
 # ---------------------------------------------------------------------------
@@ -59,21 +50,22 @@ def generate_timeseries(
     top_n: int = 5,
     stopwords: set[str] = STOPWORDS,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
-    output_filename: str = "timeseries_plot.png",
+    output_filename: str = "timeseries_plot.html",
 ) -> Path:
     """
-    Reads the accumulated headlines CSV and produces a time-series line chart
-    showing the daily frequency of the top N words over time.
+    Reads the accumulated headlines CSV and produces an interactive
+    Plotly time-series HTML chart showing the daily frequency of
+    the top N words over time.
 
     Args:
         csv_path:        Path to the historical 'titulares.csv'.
         top_n:           Number of top words to track.
         stopwords:       Words to exclude from the analysis.
-        output_dir:      Directory to save the PNG chart.
+        output_dir:      Directory to save the HTML chart.
         output_filename: File name for the saved chart.
 
     Returns:
-        Path to the generated PNG image.
+        Path to the generated HTML file.
 
     Raises:
         FileNotFoundError: if csv_path does not exist.
@@ -82,7 +74,7 @@ def generate_timeseries(
     if not csv_path.exists():
         raise FileNotFoundError(
             f"Headlines CSV not found: {csv_path}\n"
-            "Run the scraper first with: python -X utf8 main.py"
+            "Run the scraper first:  python -X utf8 main.py run"
         )
 
     df = pd.read_csv(csv_path, encoding="utf-8")
@@ -90,14 +82,13 @@ def generate_timeseries(
     if df.empty:
         raise ValueError("The headlines CSV is empty — run the scraper first.")
 
-    # Extract just the date part from the ISO-8601 timestamp
+    # Extract date portion from ISO-8601 timestamp
     df["date"] = pd.to_datetime(df["fecha"]).dt.date
 
     # Explode each headline into (date, word) pairs
     records: list[dict] = []
     for _, row in df.iterrows():
-        tokens = _tokenize(str(row["titular"]), stopwords)
-        for word in tokens:
+        for word in _tokenize(str(row["titular"]), stopwords):
             records.append({"date": row["date"], "word": word})
 
     if not records:
@@ -105,136 +96,117 @@ def generate_timeseries(
 
     long_df = pd.DataFrame(records)
 
-    # Identify the top N words globally (by total count)
+    # Identify the top N words globally
     top_words = [w for w, _ in Counter(long_df["word"]).most_common(top_n)]
 
-    # Keep only top words, count per (date, word)
+    # Aggregate daily frequency for top words (long format — perfect for px.line)
     daily = (
         long_df[long_df["word"].isin(top_words)]
         .groupby(["date", "word"])
         .size()
         .reset_index(name="frequency")
     )
+    daily["date"] = pd.to_datetime(daily["date"])
+    daily = daily.sort_values(["date", "word"])
 
-    # Pivot to matrix: rows = date, columns = word
-    pivot = (
-        daily.pivot(index="date", columns="word", values="frequency")
-        .fillna(0)
-        .sort_index()
-    )
-    pivot.index = pd.to_datetime(pivot.index)
-
-    unique_dates = pivot.index.nunique()
+    # Build readable date range for the subtitle
+    unique_dates = daily["date"].nunique()
+    min_d = daily["date"].min().strftime("%b %d")
+    max_d = daily["date"].max().strftime("%b %d, %Y")
+    date_range = f"{min_d} – {max_d}" if unique_dates > 1 else min_d
 
     # -----------------------------------------------------------------------
-    # Plot
+    # Build Plotly chart
     # -----------------------------------------------------------------------
-    plt.style.use("dark_background")
-    fig, ax = plt.subplots(figsize=(14, 7))
-    fig.patch.set_facecolor(_DARK_BG)
-    ax.set_facecolor(_PANEL_BG)
+    fig = px.line(
+        daily,
+        x="date",
+        y="frequency",
+        color="word",
+        markers=True,
+        template="plotly_dark",
+        title=(
+            f"Wikipedia Headline Word Frequency — Top {top_n} Words"
+            f"<br><sup>{date_range}  ·  {len(df):,} headlines tracked</sup>"
+        ),
+        labels={
+            "date":      "Date",
+            "frequency": "Daily Occurrences",
+            "word":      "Word",
+        },
+        color_discrete_sequence=_PALETTE,
+        line_shape="spline",
+    )
 
-    for i, word in enumerate(top_words):
-        if word not in pivot.columns:
-            continue
-        color = _PALETTE[i % len(_PALETTE)]
-        ax.plot(
-            pivot.index,
-            pivot[word],
-            label=word,
-            color=color,
-            linewidth=2.5,
-            marker="o",
-            markersize=7,
-            markerfacecolor=color,
-            markeredgecolor=_DARK_BG,
-            markeredgewidth=1.2,
-            alpha=0.92,
+    # Polish the traces
+    fig.update_traces(
+        line=dict(width=3),
+        marker=dict(size=9, line=dict(width=1.5, color="#0D1117")),
+    )
+
+    # Custom layout on top of plotly_dark
+    fig.update_layout(
+        plot_bgcolor="#161B22",
+        paper_bgcolor="#0D1117",
+        font=dict(family="Inter, system-ui, sans-serif", color="#E2E8F0", size=13),
+        title=dict(font=dict(size=18, color="white"), x=0.5, xanchor="center", pad=dict(b=20)),
+        legend=dict(
+            title=dict(text=f"Top {top_n} Words", font=dict(color="#94A3B8")),
+            bgcolor="#21262D",
+            bordercolor="#30363D",
+            borderwidth=1,
+        ),
+        hovermode="x unified",
+        hoverlabel=dict(bgcolor="#21262D", bordercolor="#30363D", font_color="white"),
+        xaxis=dict(
+            showgrid=True,
+            gridcolor="#30363D",
+            tickformat="%b %d",
+            dtick="D1",
+            title=dict(font=dict(color="#94A3B8")),
+            tickfont=dict(color="#CBD5E1"),
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor="#30363D",
+            title=dict(font=dict(color="#94A3B8")),
+            tickfont=dict(color="#CBD5E1"),
+            rangemode="tozero",
+        ),
+        margin=dict(t=100, b=60, l=60, r=40),
+    )
+
+    # Single-day hint annotation
+    if unique_dates == 1:
+        fig.add_annotation(
+            text="Tip: run daily to build a multi-day time series",
+            xref="paper", yref="paper",
+            x=0.5, y=-0.12,
+            showarrow=False,
+            font=dict(color="#94A3B8", size=11),
+            align="center",
         )
 
-    # --- Title & labels ---
-    num_days = unique_dates
-    date_range = (
-        f"{pivot.index.min().strftime('%b %d')} – {pivot.index.max().strftime('%b %d, %Y')}"
-        if num_days > 1
-        else pivot.index.min().strftime("%B %d, %Y")
-    )
-    ax.set_title(
-        f"Wikipedia Headline Word Frequency — Top {top_n} Words\n"
-        f"{date_range}  ·  {len(df):,} headlines tracked",
-        fontsize=15,
-        fontweight="bold",
-        color="white",
-        pad=18,
-        linespacing=1.6,
-    )
-    ax.set_xlabel("Date", fontsize=12, color=_AXIS_COLOR, labelpad=10)
-    ax.set_ylabel("Daily Occurrences", fontsize=12, color=_AXIS_COLOR, labelpad=10)
-
-    # --- X-axis date formatting ---
-    if unique_dates == 1:
-        # Single-day: show a clear label so the chart isn't blank on x-axis
-        ax.set_xticks(pivot.index)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-    else:
-        ax.xaxis.set_major_locator(mdates.DayLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-
-    plt.xticks(rotation=45, ha="right", color=_TICK_COLOR, fontsize=10)
-    plt.yticks(color=_TICK_COLOR, fontsize=10)
-
-    # --- Grid & spines ---
-    ax.grid(color=_GRID_COLOR, linestyle="--", linewidth=0.8, alpha=0.7)
-    ax.spines["bottom"].set_color(_GRID_COLOR)
-    ax.spines["left"].set_color(_GRID_COLOR)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-    # --- Legend ---
-    legend = ax.legend(
-        title=f"Top {top_n} Words",
-        title_fontsize=10,
-        fontsize=10,
-        framealpha=0.25,
-        facecolor="#21262D",
-        edgecolor=_GRID_COLOR,
-        labelcolor="white",
-        loc="upper right",
-    )
-    legend.get_title().set_color(_AXIS_COLOR)
-
-    # --- Annotation for single-day chart ---
-    if unique_dates == 1:
-        ax.annotate(
-            "Tip: run daily to build a multi-day time series",
-            xy=(0.5, 0.05),
-            xycoords="axes fraction",
-            ha="center",
-            fontsize=9,
-            color=_AXIS_COLOR,
-            style="italic",
-        )
-
-    # --- Footer ---
-    fig.text(
-        0.99, 0.01,
-        "Source: Wikipedia Portada  ·  github.com/YOUR_USERNAME/wikipedia-scraper",
-        ha="right",
-        fontsize=8,
-        color=_FOOTER_COLOR,
+    # Footer watermark
+    fig.add_annotation(
+        text="Source: Wikipedia Portada  ·  github.com/YOUR_USERNAME/wikipedia-scraper",
+        xref="paper", yref="paper",
+        x=1.0, y=-0.09,
+        showarrow=False,
+        font=dict(color="#484F58", size=9),
+        align="right",
     )
 
-    plt.tight_layout(pad=2.0)
-
-    # --- Save ---
+    # -----------------------------------------------------------------------
+    # Save as interactive HTML
+    # -----------------------------------------------------------------------
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / output_filename
-    plt.savefig(
+
+    fig.write_html(
         output_path,
-        dpi=150,
-        bbox_inches="tight",
-        facecolor=fig.get_facecolor(),
+        include_plotlyjs="cdn",   # loads Plotly from CDN — keeps file small
+        full_html=True,
     )
-    plt.close(fig)
 
     return output_path

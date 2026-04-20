@@ -25,6 +25,8 @@ htmlcov/
 output/*.csv
 output/*.json
 output/*.txt
+output/*.html
+output/*.png
 # Keep the folder itself tracked via .gitkeep
 !output/.gitkeep
 

@@ -11,8 +11,8 @@ from pathlib import Path
 from .storage import DEFAULT_OUTPUT_DIR
 
 # ---------------------------------------------------------------------------
-# Stopwords en español: artículos, preposiciones, conjunciones y pronombres
-# que no aportan significado semántico al análisis.
+# Stopwords en español: artículos, preposiciones, conjunciones, pronombres
+# y palabras frecuentes que no aportan significado semántico al análisis.
 # ---------------------------------------------------------------------------
 STOPWORDS: set[str] = {
     # artículos
@@ -32,8 +32,14 @@ STOPWORDS: set[str] = {
     "es", "son", "fue", "ser", "ha", "han", "he", "hay",
     # adverbios y partículas frecuentes
     "ya", "no", "mas", "muy", "tambien", "solo", "bien",
-    # ruido temporal (común en noticias con fechas)
-    "hace", "anos",
+    # ruido temporal genérico
+    "hace", "anos", "años",
+    # meses del año — dominan Wikipedia porque cada noticia lleva fecha
+    # ("19 de abril: ..."), pero no aportan significado temático
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+    # ruido de Wikipedia: referencias a imágenes en pies de foto
+    "imagen", "superior", "inferior",
 }
 
 # Solo conservar letras del alfabeto español (incluyendo acentos y ñ)
